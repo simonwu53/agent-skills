@@ -1,0 +1,10 @@
+# Python (uv) — only created if a feature ever needs Python
+.venv/
+__pycache__/
+*.pyc
+
+# OS noise
+.DS_Store
+
+# Editor noise
+*.swp
