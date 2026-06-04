@@ -8,3 +8,6 @@ __pycache__/
 
 # Editor noise
 *.swp
+
+# Local Claude settings (machine-specific)
+.claude/settings.local.json
