@@ -79,6 +79,25 @@ When your changes create orphans:
   antigravity-ide) when not narrowed by a flag. `-p`/`--path` switches to project scope
   (value optional → current dir).
 
+## Version Control
+
+- **Never commit straight to `main`.** Gemini / Antigravity works on the `gemini_space`
+  branch; other agents use `{agent_name}_space` (e.g. Claude → `claude_space`). Branch off
+  the latest `main` if the working branch doesn't exist yet.
+- **`main` advances one squashed commit per update.** When the user asks to push updates
+  to the remote, squash every commit on the working branch into a single commit on `main`
+  (`git checkout main && git merge --squash <branch> && git commit`). `main` only ever
+  moves forward by one summarized commit at a time — never a string of working commits.
+- **Delete the working branch after `main` is updated.** Once the squashed commit is on
+  `main` and pushed, the old working branch can be safely removed (local and remote);
+  start the next round of work from a fresh branch off `main`.
+- **The squashed commit message is a changelog entry.** Write a proposed title line, then
+  a concise bulleted summary of what changed. Keep it tight, not wordy.
+- **Versioning is `major.minor.patch`** (e.g. `1.0.0`), bumped in the changelog title:
+  - **patch** — bug fixes / small corrections.
+  - **minor** — additive changes, e.g. a new skill.
+  - **major** — significant changes: new features, source-code refactors, breaking changes.
+
 ## Interacting with the user
 
 - When a request maps onto an existing operation, prefer running `main.sh` over ad-hoc
