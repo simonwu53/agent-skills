@@ -73,17 +73,34 @@ When your changes create orphans:
   and any removal, must prompt the user with a `y/n` confirmation. Prompts read from the
   terminal — never run them inside a piped `while read` loop (it steals stdin); iterate
   with newline-`IFS` `for` loops instead (see `install.sh` / `remove.sh`).
-- **Install creates symlinks**, never copies, so the repo stays the single source of truth.
+- **Install copies skills by default** (so tools that don't follow symlinks, e.g. Claude
+  Desktop, can see them); `--symlink` opts into soft links pointing at the repo. The same
+  copy/symlink mode applies to pins re-installed during that install run.
+- **`--update` is install that overwrites without prompting.** Plain `--install` warns and
+  asks `y/n` before overwriting a skill that already exists in the target (declining skips
+  just that skill). `--update` is the same operation (dispatches to `install_main`) but skips
+  that per-skill prompt and only touches the named skill(s) — it implies `--keep`, so the
+  rest of the target dir is left alone (no clear, no prompt).
+- **`--list` shows skills.** With no tool flag or `-p`, it lists this repo's library grouped
+  by category. With a tool flag (and/or `-p` for project scope) it lists the skills installed
+  in that tool's skills dir, marking each `(copy)` or `(symlink)`.
+- **`--skill` accepts multiple values** for install and remove (e.g. `--skill A B C`).
+- **Remove targets flat skill names.** The destination is flattened (no category there), so
+  removal takes the installed skill name(s) — not `Category/skill`. There is no remove-by-
+  category. **Omitting `--skill` removes every installed skill** for the targeted tool(s).
+  Removal deletes a managed entry whether it's a symlink or a copied skill dir (one holding
+  `SKILL.md`); a directory that isn't a managed skill is left untouched and reported.
 - **Default category is `Main`** when `--cat`/`-c` is omitted; create it if missing.
 - **Default scope is global, default tool set is all three** (claude, antigravity,
   antigravity-ide) when not narrowed by a flag. `-p`/`--path` switches to project scope
   (value optional → current dir).
 - **Pins persist across installs.** `--pin` records a skill in `config.yaml` *and*
-  symlinks it now; after every install-clear, pinned skills are re-linked, so they survive
-  even without `--keep`. `--unpin` drops the config entry and its symlinks.
+  installs it now; after every install-clear, pinned skills are re-installed, so they
+  survive even without `--keep`. `--unpin` drops the config entry and the skills it
+  installed.
 - **Remove/unload read `config.yaml` first.** If a removal (or `--unload`) targets a pinned
-  skill, warn the user, confirm, and only then delete — also stripping the matching pin
-  entry. (A category-level pin covering a single-skill removal is left intact; tell the
+  skill, warn the user, confirm, and only then delete — also stripping the matching
+  single-skill pin entry. (A category-level pin covering a removal is left intact; tell the
   user to `--unpin` the category.)
 - **`--unload` deletes the repo source** (inverse of `--load`) — destructive, so confirm
   first. It removes empty category dirs and warns that any existing symlinks will dangle.

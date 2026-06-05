@@ -145,26 +145,52 @@ $2
 
 # --- symlink helpers (shared by install / remove / pin) ----------------------
 
-# link_skill <skill-dir> <dest-dir> — symlink dest/<name> -> <skill-dir>.
+# link_skill <skill-dir> <dest-dir> [mode] — install skill into dest as <name>.
+# mode "copy" (default) duplicates the folder so tools that don't follow symlinks
+# (e.g. Claude Desktop) can see it; mode "symlink" creates a soft link instead.
 link_skill() {
-  local skill="$1" dest="$2"
+  local skill="$1" dest="$2" mode="${3:-copy}"
   local name; name="$(basename "$skill")"
-  ln -sfn "$skill" "$dest/$name"
-  info "Linked: $dest/$name -> $skill"
+  local entry="$dest/$name"
+  if [ "$mode" = "symlink" ]; then
+    ln -sfn "$skill" "$entry"
+    info "Linked: $entry -> $skill"
+  else
+    rm -rf "$entry"
+    cp -R "$skill" "$entry"
+    info "Copied: $entry"
+  fi
 }
 
-# unlink_skill <name> <dest-dir> — remove dest/<name> only if it is a symlink.
+# unlink_skill <name> <dest-dir> — remove dest/<name> if it is a managed skill:
+# a symlink we created, or a copied skill directory (identified by its SKILL.md).
+# Anything else (a real dir that isn't a skill) is left untouched and reported.
 unlink_skill() {
   local name="$1" dest="$2"
   local entry="$dest/$name"
   if [ -L "$entry" ]; then
     rm -f "$entry"
     info "Removed: $entry"
+  elif [ -d "$entry" ] && is_skill_dir "$entry"; then
+    rm -rf "$entry"
+    info "Removed: $entry"
   elif [ -e "$entry" ]; then
-    warn "Not a symlink, leaving in place: $entry"
+    warn "Not a managed skill, leaving in place: $entry"
   else
     note "Not installed: $entry"
   fi
+}
+
+# remove_all_skills <dest-dir> — remove every managed skill in dest (symlinks and
+# copied skill dirs), leaving anything that isn't a managed skill.
+remove_all_skills() {
+  local dest="$1"
+  [ -d "$dest" ] || { note "Nothing installed: $dest"; return 0; }
+  local entry
+  for entry in "$dest"/*; do
+    [ -e "$entry" ] || [ -L "$entry" ] || continue
+    unlink_skill "$(basename "$entry")" "$dest"
+  done
 }
 
 # build_dests <tools> <scope> <project-root> — print the deduped destination

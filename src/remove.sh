@@ -3,8 +3,8 @@
 # Removes skill symlinks previously created by `install`.
 
 remove_main() {
-  local target="" scope="global" project_root=""
-  local tools=""
+  local scope="global" project_root=""
+  local tools="" names="" remove_all=0
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -13,8 +13,14 @@ remove_main() {
       --antigravity)     tools="$tools antigravity" ;;
       --antigravity-ide) tools="$tools antigravity-ide" ;;
       -s|--skill)
-        [ -n "${2:-}" ] || die "$1 requires a value, e.g. --skill Academic/pptx-poster"
-        target="$2"; shift
+        [ -n "${2:-}" ] && [ "${2#-}" = "$2" ] \
+          || die "$1 requires at least one value, e.g. --skill pptx-poster"
+        shift
+        while [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; do
+          names="${names:+$names
+}$1"; shift
+        done
+        continue
         ;;
       -p|--path)
         scope="project"
@@ -29,7 +35,8 @@ remove_main() {
     shift
   done
 
-  [ -n "$target" ] || die "No target. Use -s/--skill [Category] or -s/--skill [Category]/[skill-name]"
+  # No --skill given → remove every skill installed for the targeted tool(s).
+  [ -n "$names" ] || remove_all=1
   [ -n "$tools" ] || tools="$ALL_TOOLS"
 
   if [ "$scope" = "project" ]; then
@@ -37,31 +44,26 @@ remove_main() {
     project_root="$(cd "$project_root" && pwd)"
   fi
 
-  split_target "$target"
-
-  # Resolve the skill name(s) to remove from the repo definitions.
-  local skill_dirs names="" s
-  skill_dirs="$(resolve_skill_dirs "$TARGET_CATEGORY" "$TARGET_SKILL")"
-  local OLDIFS="$IFS"; IFS='
-'
-  for s in $skill_dirs; do
-    names="${names:+$names
-}$(basename "$s")"
-  done
-  IFS="$OLDIFS"
-
   # Build deduped destination list.
   local dests d; dests="$(build_dests "$tools" "$scope" "$project_root")"
   [ -n "$dests" ] || die "No valid destinations resolved"
 
-  info "About to remove '$target' ($scope) from:"
+  local OLDIFS="$IFS"
+  if [ "$remove_all" -eq 1 ]; then
+    info "About to remove ALL skills ($scope) from:"
+  else
+    local disp; disp="$(printf '%s' "$names" | tr '\n' ' ')"
+    info "About to remove '$disp' ($scope) from:"
+  fi
   IFS='
 '
   for d in $dests; do note "  $d"; done
   IFS="$OLDIFS"
 
-  # Detect pins protecting this removal. `strip` holds exact-selector pins whose
-  # config should be cleaned (skill<SEP>intersecting-tools, one per line).
+  # Detect pins protecting this removal. `strip` holds single-skill pins whose
+  # config should be cleaned (skill<SEP>intersecting-tools, one per line);
+  # category-level pins are warned about but left intact. With --remove-all every
+  # pin for the targeted tools/scope is considered matched.
   local pin_warn="" strip="" r
   IFS='
 '
@@ -76,25 +78,33 @@ remove_main() {
       local hitt="" t
       for t in $tools; do _in_list_sp "$rt" "$t" && hitt="${hitt:+$hitt }$t"; done
       if [ -n "$hitt" ]; then
-        # Does the pin's skill selector cover any name being removed?
-        local pcat psk pdirs pn matched=0
-        case "$rs" in
-          */*) pcat="${rs%%/*}"; psk="${rs#*/}" ;;
-          *)   pcat="$rs";        psk="" ;;
-        esac
-        if pdirs="$(resolve_skill_dirs_soft "$pcat" "$psk")"; then
-          local IFS3="$IFS"; IFS='
+        local matched=0
+        if [ "$remove_all" -eq 1 ]; then
+          matched=1
+        else
+          # Does the pin's skill selector cover any name being removed?
+          local pcat psk pdirs pn
+          case "$rs" in
+            */*) pcat="${rs%%/*}"; psk="${rs#*/}" ;;
+            *)   pcat="$rs";        psk="" ;;
+          esac
+          if pdirs="$(resolve_skill_dirs_soft "$pcat" "$psk")"; then
+            local IFS3="$IFS"; IFS='
 '
-          for pn in $pdirs; do
-            _in_list "$names" "$(basename "$pn")" && matched=1
-          done
-          IFS="$IFS3"
+            for pn in $pdirs; do
+              _in_list "$names" "$(basename "$pn")" && matched=1
+            done
+            IFS="$IFS3"
+          fi
         fi
         if [ "$matched" -eq 1 ]; then
           pin_warn="${pin_warn}
   $rs (tools: $hitt)"
-          [ "$rs" = "$target" ] && strip="${strip:+$strip
-}$rs$_SEP$hitt"
+          # Strip only single-skill pins (Category/skill); leave category pins.
+          case "$rs" in
+            */*) strip="${strip:+$strip
+}$rs$_SEP$hitt" ;;
+          esac
         fi
       fi
     fi
@@ -105,7 +115,7 @@ remove_main() {
 
   if [ -n "$pin_warn" ]; then
     warn "This removal targets PINNED skill(s):${pin_warn}"
-    note "Confirming will also delete the matching pin config (category-level pins are left intact — use --unpin to clear those)."
+    note "Confirming will also delete the matching single-skill pin config (category-level pins are left intact — use --unpin to clear those)."
     confirm "Remove pinned skill(s) and delete their pin config?" || die "Aborted (pinned)."
     local cfg_path=""; [ "$scope" = "project" ] && cfg_path="$project_root"
     IFS='
@@ -123,10 +133,14 @@ remove_main() {
   IFS='
 '
   for d in $dests; do
-    local n
-    for n in $names; do
-      unlink_skill "$n" "$d"
-    done
+    if [ "$remove_all" -eq 1 ]; then
+      remove_all_skills "$d"
+    else
+      local n
+      for n in $names; do
+        unlink_skill "$n" "$d"
+      done
+    fi
   done
   IFS="$OLDIFS"
 

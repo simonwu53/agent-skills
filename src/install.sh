@@ -19,19 +19,29 @@ clear_dir() {
 }
 
 install_main() {
-  local target="" scope="global" project_root="" keep=0
-  local tools=""
+  local scope="global" project_root="" keep=0 mode="copy" force=0
+  local tools="" targets=""
 
   while [ $# -gt 0 ]; do
     case "$1" in
       --install) ;;
+      # --update is install that overwrites existing skills without prompting.
+      # It only touches the named skills, so it implies --keep (no dir clear).
+      --update) force=1; keep=1 ;;
       --claude)          tools="$tools claude" ;;
       --antigravity)     tools="$tools antigravity" ;;
       --antigravity-ide) tools="$tools antigravity-ide" ;;
       --keep) keep=1 ;;
+      --symlink) mode="symlink" ;;
       -s|--skill)
-        [ -n "${2:-}" ] || die "$1 requires a value, e.g. --skill Academic/pptx-poster"
-        target="$2"; shift
+        [ -n "${2:-}" ] && [ "${2#-}" = "$2" ] \
+          || die "$1 requires at least one value, e.g. --skill Academic/pptx-poster"
+        shift
+        while [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; do
+          targets="${targets:+$targets
+}$1"; shift
+        done
+        continue
         ;;
       -p|--path)
         scope="project"
@@ -46,7 +56,7 @@ install_main() {
     shift
   done
 
-  [ -n "$target" ] || die "No target. Use -s/--skill [Category] or -s/--skill [Category]/[skill-name]"
+  [ -n "$targets" ] || die "No target. Use -s/--skill [Category] or -s/--skill [Category]/[skill-name]"
 
   # Default to all tools when none specified.
   [ -n "$tools" ] || tools="$ALL_TOOLS"
@@ -57,29 +67,54 @@ install_main() {
     project_root="$(cd "$project_root" && pwd)"
   fi
 
-  split_target "$target"
-  local skill_dirs; skill_dirs="$(resolve_skill_dirs "$TARGET_CATEGORY" "$TARGET_SKILL")"
+  # Resolve skill dirs across every --skill selector (each Category or Category/skill).
+  local OLDIFS="$IFS"
+  local skill_dirs="" t resolved
+  IFS='
+'
+  for t in $targets; do
+    IFS="$OLDIFS"
+    split_target "$t"
+    resolved="$(resolve_skill_dirs "$TARGET_CATEGORY" "$TARGET_SKILL")"
+    skill_dirs="${skill_dirs:+$skill_dirs
+}$resolved"
+    IFS='
+'
+  done
+  IFS="$OLDIFS"
 
   # Build a deduped list of destination directories.
   local dests d; dests="$(build_dests "$tools" "$scope" "$project_root")"
   [ -n "$dests" ] || die "No valid destinations resolved"
 
-  info "Installing '$target' ($scope) to:"
-  local OLDIFS="$IFS"; IFS='
+  local disp; disp="$(printf '%s' "$targets" | tr '\n' ' ')"
+  local what="Copying"; [ "$mode" = "symlink" ] && what="Linking"
+  [ "$force" -eq 1 ] && what="Updating"
+  info "$what '$disp' ($scope) to:"
+  IFS='
 '
   for d in $dests; do note "  $d"; done
 
-  # Per destination: optionally clear, then symlink each skill. Use newline-IFS
+  # Per destination: optionally clear, then install each skill. Use newline-IFS
   # for-loops (not piped while-read) so confirm prompts keep reading the tty.
   for d in $dests; do
     mkdir -p "$d"
     if [ "$keep" -ne 1 ]; then
       clear_dir "$d"
-      relink_pins_into "$d" "$scope" "$project_root"
+      relink_pins_into "$d" "$scope" "$project_root" "$mode"
     fi
     local s
     for s in $skill_dirs; do
-      link_skill "$s" "$d"
+      # If the skill already exists in the target, --install warns and asks
+      # before overwriting; --update (force) overwrites silently.
+      local sname; sname="$(basename "$s")"
+      if [ "$force" -ne 1 ] && [ -e "$d/$sname" ]; then
+        if ! confirm "Skill '$sname' already exists in '$d'. Update it?"; then
+          note "Skipped: $d/$sname"
+          continue
+        fi
+      fi
+      link_skill "$s" "$d" "$mode"
     done
   done
   IFS="$OLDIFS"
@@ -87,11 +122,12 @@ install_main() {
   info "Done."
 }
 
-# relink_pins_into <dest-dir> <scope> <project-root>
-# After a clear, re-link any pinned skills that map to <dest-dir>, so pins are
-# always available. Tolerates pins whose source was since removed (--unload).
+# relink_pins_into <dest-dir> <scope> <project-root> [mode]
+# After a clear, re-install any pinned skills that map to <dest-dir> (using the
+# install run's copy/symlink mode), so pins are always available. Tolerates pins
+# whose source was since removed (--unload).
 relink_pins_into() {
-  local dest="$1" scope="$2" project_root="$3"
+  local dest="$1" scope="$2" project_root="$3" mode="${4:-copy}"
   local OLDIFS="$IFS" r
   IFS='
 '
@@ -115,7 +151,7 @@ relink_pins_into() {
         if pdirs="$(resolve_skill_dirs_soft "$pcat" "$psk")"; then
           local IFS2="$IFS"; IFS='
 '
-          for s in $pdirs; do link_skill "$s" "$dest"; done
+          for s in $pdirs; do link_skill "$s" "$dest" "$mode"; done
           IFS="$IFS2"
         fi
       fi
