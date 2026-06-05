@@ -178,3 +178,56 @@ download_main() {
     load_from_zip "$file" "$category"
   fi
 }
+
+# unload_main — implements `main.sh --unload ...`. The inverse of --load: delete
+# a skill's (or whole category's) source from the repo skills/ library.
+unload_main() {
+  local target=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --unload) ;;
+      -s|--skill)
+        [ -n "${2:-}" ] || die "$1 requires a value, e.g. --skill Academic/pptx-poster"
+        target="$2"; shift
+        ;;
+      *) warn "Ignoring unexpected argument: $1" ;;
+    esac
+    shift
+  done
+
+  [ -n "$target" ] || die "No target. Use -s/--skill [Category] or -s/--skill [Category]/[skill-name]"
+
+  split_target "$target"
+  local skill_dirs s; skill_dirs="$(resolve_skill_dirs "$TARGET_CATEGORY" "$TARGET_SKILL")"
+
+  info "About to DELETE source from the repo for '$target':"
+  local OLDIFS="$IFS"; IFS='
+'
+  for s in $skill_dirs; do note "  $s"; done
+  IFS="$OLDIFS"
+
+  confirm "Permanently delete the above skill source?" || die "Aborted."
+
+  IFS='
+'
+  for s in $skill_dirs; do
+    rm -rf "$s"
+    info "Deleted source: $s"
+  done
+  IFS="$OLDIFS"
+
+  # Remove the category dir if it is now empty.
+  local catdir="$REPO_ROOT/skills/$TARGET_CATEGORY"
+  if [ -d "$catdir" ] && [ -z "$(ls -A "$catdir" 2>/dev/null)" ]; then
+    rmdir "$catdir"
+    note "Removed empty category: $TARGET_CATEGORY"
+  fi
+
+  # Strip any pin config covering what we just deleted.
+  if config_remove_pins_matching "$target"; then
+    warn "Also removed pin config for '$target'."
+  fi
+
+  note "Any symlinks elsewhere that pointed at these sources will now dangle."
+  info "Done."
+}

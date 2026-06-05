@@ -95,6 +95,29 @@ resolve_skill_dirs() {
   fi
 }
 
+# resolve_skill_dirs_soft <category> <skill-or-empty>
+# Like resolve_skill_dirs, but warns and returns non-zero instead of dying. Used
+# when a missing skill (e.g. since --unloaded) must not abort the whole run.
+resolve_skill_dirs_soft() {
+  local category="$1" skill="$2"
+  local base="$REPO_ROOT/skills/$category"
+  [ -d "$base" ] || { warn "Category not found in repo: $category"; return 1; }
+
+  if [ -n "$skill" ]; then
+    local d="$base/$skill"
+    is_skill_dir "$d" || { warn "Skill not found in repo: $category/$skill"; return 1; }
+    printf '%s\n' "$d"
+  else
+    local found=0 d
+    for d in "$base"/*/; do
+      [ -d "$d" ] || continue
+      d="${d%/}"
+      if is_skill_dir "$d"; then printf '%s\n' "$d"; found=1; fi
+    done
+    [ "$found" -eq 1 ] || { warn "No valid skills found in category: $category"; return 1; }
+  fi
+}
+
 # split_target <selector>  e.g. "Academic/pptx-poster" or "Academic"
 # Sets TARGET_CATEGORY and TARGET_SKILL (skill may be empty).
 split_target() {
@@ -119,3 +142,48 @@ $2
     *) return 1 ;;
   esac
 }
+
+# --- symlink helpers (shared by install / remove / pin) ----------------------
+
+# link_skill <skill-dir> <dest-dir> — symlink dest/<name> -> <skill-dir>.
+link_skill() {
+  local skill="$1" dest="$2"
+  local name; name="$(basename "$skill")"
+  ln -sfn "$skill" "$dest/$name"
+  info "Linked: $dest/$name -> $skill"
+}
+
+# unlink_skill <name> <dest-dir> — remove dest/<name> only if it is a symlink.
+unlink_skill() {
+  local name="$1" dest="$2"
+  local entry="$dest/$name"
+  if [ -L "$entry" ]; then
+    rm -f "$entry"
+    info "Removed: $entry"
+  elif [ -e "$entry" ]; then
+    warn "Not a symlink, leaving in place: $entry"
+  else
+    note "Not installed: $entry"
+  fi
+}
+
+# build_dests <tools> <scope> <project-root> — print the deduped destination
+# skills dirs (one per line) for a set of tools in the given scope.
+build_dests() {
+  local tools="$1" scope="$2" project_root="$3"
+  local dests="" t d
+  for t in $tools; do
+    if [ "$scope" = "global" ]; then
+      d="$(global_dir_for_tool "$t")" || { warn "Unknown tool: $t"; continue; }
+    else
+      d="$(project_dir_for_tool "$t" "$project_root")" || { warn "Unknown tool: $t"; continue; }
+    fi
+    _in_list "$dests" "$d" || dests="${dests:+$dests
+}$d"
+  done
+  printf '%s\n' "$dests"
+}
+
+# --- machine-local configuration (config.yaml) -------------------------------
+# shellcheck source=src/config.sh
+. "$REPO_ROOT/src/config.sh"

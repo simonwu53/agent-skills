@@ -18,14 +18,6 @@ clear_dir() {
   fi
 }
 
-# link_skill <skill-dir> <dest-dir> — symlink dest/<name> -> <skill-dir>.
-link_skill() {
-  local skill="$1" dest="$2"
-  local name; name="$(basename "$skill")"
-  ln -sfn "$skill" "$dest/$name"
-  info "Linked: $dest/$name -> $skill"
-}
-
 install_main() {
   local target="" scope="global" project_root="" keep=0
   local tools=""
@@ -37,21 +29,24 @@ install_main() {
       --antigravity)     tools="$tools antigravity" ;;
       --antigravity-ide) tools="$tools antigravity-ide" ;;
       --keep) keep=1 ;;
+      -s|--skill)
+        [ -n "${2:-}" ] || die "$1 requires a value, e.g. --skill Academic/pptx-poster"
+        target="$2"; shift
+        ;;
       -p|--path)
         scope="project"
-        if [ -n "$2" ] && [ "${2#-}" = "$2" ]; then
+        if [ -n "${2:-}" ] && [ "${2#-}" = "$2" ]; then
           project_root="$2"; shift
         else
           project_root="."
         fi
         ;;
-      --*) target="${1#--}" ;;
       *) warn "Ignoring unexpected argument: $1" ;;
     esac
     shift
   done
 
-  [ -n "$target" ] || die "No target. Use --[Category] or --[Category]/[skill-name]"
+  [ -n "$target" ] || die "No target. Use -s/--skill [Category] or -s/--skill [Category]/[skill-name]"
 
   # Default to all tools when none specified.
   [ -n "$tools" ] || tools="$ALL_TOOLS"
@@ -66,16 +61,7 @@ install_main() {
   local skill_dirs; skill_dirs="$(resolve_skill_dirs "$TARGET_CATEGORY" "$TARGET_SKILL")"
 
   # Build a deduped list of destination directories.
-  local dests="" t d
-  for t in $tools; do
-    if [ "$scope" = "global" ]; then
-      d="$(global_dir_for_tool "$t")" || { warn "Unknown tool: $t"; continue; }
-    else
-      d="$(project_dir_for_tool "$t" "$project_root")" || { warn "Unknown tool: $t"; continue; }
-    fi
-    _in_list "$dests" "$d" || dests="${dests:+$dests
-}$d"
-  done
+  local dests d; dests="$(build_dests "$tools" "$scope" "$project_root")"
   [ -n "$dests" ] || die "No valid destinations resolved"
 
   info "Installing '$target' ($scope) to:"
@@ -87,7 +73,10 @@ install_main() {
   # for-loops (not piped while-read) so confirm prompts keep reading the tty.
   for d in $dests; do
     mkdir -p "$d"
-    [ "$keep" -eq 1 ] || clear_dir "$d"
+    if [ "$keep" -ne 1 ]; then
+      clear_dir "$d"
+      relink_pins_into "$d" "$scope" "$project_root"
+    fi
     local s
     for s in $skill_dirs; do
       link_skill "$s" "$d"
@@ -96,4 +85,43 @@ install_main() {
   IFS="$OLDIFS"
 
   info "Done."
+}
+
+# relink_pins_into <dest-dir> <scope> <project-root>
+# After a clear, re-link any pinned skills that map to <dest-dir>, so pins are
+# always available. Tolerates pins whose source was since removed (--unload).
+relink_pins_into() {
+  local dest="$1" scope="$2" project_root="$3"
+  local OLDIFS="$IFS" r
+  IFS='
+'
+  for r in $(config_read_pins); do
+    IFS="$OLDIFS"
+    local rs rt rsc rp rest
+    rs="${r%%"$_SEP"*}"; rest="${r#*"$_SEP"}"
+    rt="${rest%%"$_SEP"*}"; rest="${rest#*"$_SEP"}"
+    rsc="${rest%%"$_SEP"*}"; rp="${rest#*"$_SEP"}"
+    if [ "$rsc" = "$scope" ] && { [ "$scope" = "global" ] || [ "$rp" = "$project_root" ]; }; then
+      local t hit=0
+      for t in $rt; do
+        [ "$(_record_dir_for_tool "$t" "$rsc" "$rp")" = "$dest" ] && { hit=1; break; }
+      done
+      if [ "$hit" -eq 1 ]; then
+        local pcat psk pdirs s
+        case "$rs" in
+          */*) pcat="${rs%%/*}"; psk="${rs#*/}" ;;
+          *)   pcat="$rs";        psk="" ;;
+        esac
+        if pdirs="$(resolve_skill_dirs_soft "$pcat" "$psk")"; then
+          local IFS2="$IFS"; IFS='
+'
+          for s in $pdirs; do link_skill "$s" "$dest"; done
+          IFS="$IFS2"
+        fi
+      fi
+    fi
+    IFS='
+'
+  done
+  IFS="$OLDIFS"
 }

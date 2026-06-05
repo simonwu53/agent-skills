@@ -96,22 +96,22 @@ everywhere it's installed.
 
 ```bash
 # A single skill into ALL tools' global skill dirs
-./main.sh --install --Academic/pptx-poster
+./main.sh --install --skill Academic/pptx-poster
 
 # Into one tool's global dir (claude | antigravity | antigravity-ide)
-./main.sh --install --Academic/pptx-poster --claude
+./main.sh --install --skill Academic/pptx-poster --claude
 
 # A whole category into one tool's global dir
-./main.sh --install --Development --claude
+./main.sh --install --skill Development --claude
 
 # Into a project (per-tool project dir). Path optional → current directory.
-./main.sh --install --Academic/pptx-poster --claude -p ./my-project
+./main.sh --install --skill Academic/pptx-poster --claude -p ./my-project
 
 # Keep what's already installed instead of clearing the target first
-./main.sh --install --Development --keep
+./main.sh --install --skill Development --keep
 ```
 
-- Target is `--[Category]` (all skills in it) or `--[Category]/[skill-name]` (one skill).
+- Target is `-s`/`--skill [Category]` (all skills in it) or `-s`/`--skill [Category]/[skill-name]` (one skill).
 - No tool flag → all tools. Tool flags: `--claude`, `--antigravity`, `--antigravity-ide`.
 - `-p` / `--path` switches to **project** scope. Omit the value to use the current dir.
 - By default the target skills directory is **cleared first** (with a `y/n` confirmation),
@@ -123,21 +123,85 @@ everywhere it's installed.
 
 ```bash
 # Remove a skill from ALL global locations (asks to confirm)
-./main.sh --remove --Academic/pptx-poster
+./main.sh --remove --skill Academic/pptx-poster
 
 # From one tool's global dir
-./main.sh --remove --Academic/pptx-poster --claude
+./main.sh --remove --skill Academic/pptx-poster --claude
 
 # A whole category from one tool's global dir
-./main.sh --remove --Development --claude
+./main.sh --remove --skill Development --claude
 
 # From a project (path optional → current dir)
-./main.sh --remove --Academic/pptx-poster --claude -p ./my-project
+./main.sh --remove --skill Academic/pptx-poster --claude -p ./my-project
 ```
 
 Removal only deletes **symlinks** it finds (named after the skill). If a real directory
 sits where the symlink would be, it is left untouched and reported. Removal always asks
 for confirmation.
+
+If the target is **pinned** (see below), removal warns you first, asks to confirm, and on
+confirmation also deletes the matching pin from `config.yaml`.
+
+### 4. Pin / Unpin skills (always-available)
+
+Pinning records a skill in `config.yaml` **and** symlinks it immediately. After that,
+every `--install` re-links your pinned skills *after* clearing the target — so they stay
+available even when you install a fresh set without `--keep`.
+
+```bash
+# Pin a skill for one tool (records config + links it now)
+./main.sh --pin --skill Academic/pptx-poster --claude
+
+# Pin for all tools (omit the tool flag)
+./main.sh --pin --skill Academic/pptx-poster
+
+# Pin a whole category
+./main.sh --pin --skill Development
+
+# Pin into a project scope (path optional → current dir)
+./main.sh --pin --skill Academic/pptx-poster --claude -p ./my-project
+
+# Unpin — removes the config entry and the symlinks it created
+./main.sh --unpin --skill Academic/pptx-poster --claude
+```
+
+- `--pin`/`--unpin` take the **same** flags as install/remove: `--skill`, the tool flags,
+  and `-p`/`--path` for project scope. No tool flag → all tools; default scope is global.
+- Pinning the same skill for another tool **merges** into the existing entry.
+
+### 5. Unload skills (delete the source)
+
+The inverse of `--load`: permanently delete a skill's (or a whole category's) **source**
+from this repo's `skills/` library. Asks for confirmation first.
+
+```bash
+# Delete one skill's source
+./main.sh --unload --skill Academic/pptx-poster
+
+# Delete a whole category
+./main.sh --unload --skill Development
+```
+
+- Empty category directories are removed afterward.
+- Any pin entries covering what you deleted are stripped from `config.yaml`.
+- Existing symlinks elsewhere that pointed at the deleted source will dangle (you're warned).
+
+### Configuration (`config.yaml`)
+
+State for pins (and future features) lives in a machine-local `config.yaml` at the repo
+root. It is **auto-created on first run** and **git-ignored** (it stores absolute project
+paths). The structure is namespaced and versioned so new features can add their own
+top-level section without disturbing `pins`:
+
+```yaml
+version: 1
+
+pins:
+  - skill: Academic/pptx-poster
+    tools: claude antigravity antigravity-ide
+    scope: global
+    path: ""
+```
 
 ## Tool skill locations
 
@@ -153,8 +217,11 @@ for confirmation.
 | Flag                | Alias | Applies to        | Meaning                                            |
 |---------------------|-------|-------------------|----------------------------------------------------|
 | `--load`            |       | op                | Download/import a skill                             |
+| `--unload`          |       | op                | Delete a skill's/category's source from the repo    |
 | `--install`         |       | op                | Symlink skill(s) into tools                         |
 | `--remove`          |       | op                | Remove skill symlink(s)                             |
+| `--pin`             |       | op                | Pin skill(s): link now + survive future installs    |
+| `--unpin`           |       | op                | Remove a pin (config entry + its symlinks)          |
 | `--link`            | `-l`  | load              | GitHub repo or skill-folder URL                    |
 | `--path`            | `-p`  | load              | Local skill folder (source)                        |
 | `--path`            | `-p`  | install / remove  | Project scope; value optional (current dir)        |
@@ -163,4 +230,4 @@ for confirmation.
 | `--merge`           |       | load              | Merge a `skills/<Category>/<skill>` repo as-is     |
 | `--claude` etc.     |       | install / remove  | Limit to a specific tool                           |
 | `--keep`            |       | install           | Don't clear the target dir first                   |
-| `--[Category][/skill]` |    | install / remove  | Target selector                                    |
+| `--skill`           | `-s`  | install / remove  | Target selector `[Category]` or `[Category]/[skill]` |

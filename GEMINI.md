@@ -78,9 +78,26 @@ When your changes create orphans:
 - **Default scope is global, default tool set is all three** (claude, antigravity,
   antigravity-ide) when not narrowed by a flag. `-p`/`--path` switches to project scope
   (value optional → current dir).
+- **Pins persist across installs.** `--pin` records a skill in `config.yaml` *and*
+  symlinks it now; after every install-clear, pinned skills are re-linked, so they survive
+  even without `--keep`. `--unpin` drops the config entry and its symlinks.
+- **Remove/unload read `config.yaml` first.** If a removal (or `--unload`) targets a pinned
+  skill, warn the user, confirm, and only then delete — also stripping the matching pin
+  entry. (A category-level pin covering a single-skill removal is left intact; tell the
+  user to `--unpin` the category.)
+- **`--unload` deletes the repo source** (inverse of `--load`) — destructive, so confirm
+  first. It removes empty category dirs and warns that any existing symlinks will dangle.
+- **`config.yaml` is machine-local.** Auto-created at repo root on every run, git-ignored
+  (it stores absolute project paths). Structure is namespaced + versioned (`version:`,
+  `pins:`) so future features add their own top-level section; the pins writer splices only
+  the `pins:` block and preserves the rest.
 
 ## Version Control
 
+- **Only touch version control when asked.** Do commits, merges, pushes, pull requests,
+  branch deletions, etc. *only* when the user explicitly requests them. The user decides
+  when to update the workspace or push to the origin. Otherwise, just do the job the user
+  asked for and leave version-control actions alone.
 - **Never commit straight to `main`.** Gemini / Antigravity works on the `gemini_space`
   branch; other agents use `{agent_name}_space` (e.g. Claude → `claude_space`). Branch off
   the latest `main` if the working branch doesn't exist yet.
