@@ -114,6 +114,12 @@ When your changes create orphans:
   - **patch** — bug fixes / small corrections.
   - **minor** — additive changes, e.g. a new skill.
   - **major** — significant changes: new features, source-code refactors, breaking changes.
+- **Every `main` update gets a version tag.** Whenever the remote `main` is updated, create
+  a matching annotated tag `v<major.minor.patch>` on that squashed commit and push it
+  (`git tag -a vX.Y.Z <commit> -m ...` then `git push origin vX.Y.Z`), so `main` and its tag
+  history always move forward together — there is always a version tag for each update. Also
+  publish a GitHub release from the tag (`gh release create vX.Y.Z ...`) reusing the
+  changelog as the notes. The tag version must match the changelog title's version.
 
 ## Interacting with the user
 
