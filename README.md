@@ -55,6 +55,10 @@ In **this repo** every skill lives one level under a category:
 `skills/<Category>/<skill-name>/SKILL.md`. A directory is only treated as a valid skill
 if it contains a `SKILL.md`.
 
+### Included skills
+
+- `Marketing/hermes-tweet-xquik` - Hermes Tweet and Xquik guidance for X/Twitter social listening, account analysis, post research, monitors, webhooks, REST workflows, and MCP access.
+
 ## Requirements
 
 Standard tools already present on macOS / in your shell: `bash` (3.2+), `git`, `curl`,
