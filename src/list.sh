@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # list.sh — implements `main.sh --list ...`
-# With no target flag: list the repo's skill library, grouped by category.
+# With no target flag: list the library from config.yaml, grouped by category.
 # With a tool flag (and/or -p): list the skills installed for that tool/scope.
 
 list_main() {
@@ -25,9 +25,9 @@ list_main() {
     shift
   done
 
-  # No tool flag and no project path → list the repo's library.
+  # No tool flag and no project path → list the library.
   if [ "$target_given" -eq 0 ]; then
-    list_repo
+    list_library
     return 0
   fi
 
@@ -40,28 +40,49 @@ list_main() {
   list_installed "$tools" "$scope" "$project_root"
 }
 
-# list_repo — print every skill in this repo's skills/, grouped by category.
-list_repo() {
-  local base="$REPO_ROOT/skills"
-  [ -d "$base" ] || { warn "No skills/ directory in repo: $base"; return 0; }
-  info "Skills in repo ($base):"
-  local cat d s found=0
-  for cat in "$base"/*/; do
-    [ -d "$cat" ] || continue
-    cat="${cat%/}"
-    local skills=""
-    for d in "$cat"/*/; do
-      [ -d "$d" ] || continue
-      d="${d%/}"
-      is_skill_dir "$d" && skills="${skills:+$skills }$(basename "$d")"
-    done
-    if [ -n "$skills" ]; then
-      printf '%s\n' "  $(basename "$cat")/"
-      for s in $skills; do printf '%s\n' "    - $s"; done
-      found=1
-    fi
+# list_library — print every skill recorded in config.yaml, grouped by category.
+list_library() {
+  local records; records="$(config_read_skills)"
+  info "Skills in library ($(basename "$CONFIG_FILE")):"
+  if [ -z "$records" ]; then
+    note "  (no skills loaded)"
+    return 0
+  fi
+
+  # Collect the unique categories, then print each group.
+  local OLDIFS="$IFS" r cats="" c
+  IFS='
+'
+  for r in $records; do
+    IFS="$OLDIFS"
+    c="$(_skill_field "$r" 4)"
+    _in_list "$cats" "$c" || cats="${cats:+$cats
+}$c"
+    IFS='
+'
   done
-  [ "$found" -eq 1 ] || note "  (no skills found)"
+  for c in $cats; do
+    IFS="$OLDIFS"
+    printf '%s\n' "  $c/"
+    local IFS2="$IFS"; IFS='
+'
+    for r in $records; do
+      IFS="$IFS2"
+      [ "$(_skill_field "$r" 4)" = "$c" ] || { IFS='
+'; continue; }
+      local name repo pin mark=""
+      name="${r%%"$_SEP"*}"
+      repo="$(_skill_field "$r" 2)"
+      pin="$(_skill_field "$r" 5)"
+      [ "$pin" = "true" ] && mark=" (pinned)"
+      printf '%s\n' "    - $name  [$repo]$mark"
+      IFS='
+'
+    done
+    IFS='
+'
+  done
+  IFS="$OLDIFS"
 }
 
 # list_installed <tools> <scope> <project-root> — print the managed skills (copies

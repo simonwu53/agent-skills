@@ -66,67 +66,52 @@ project_dir_for_tool() {
   esac
 }
 
-# --- skill resolution --------------------------------------------------------
+# --- skill resolution (db-backed) --------------------------------------------
 
 # A valid skill directory contains a SKILL.md file.
 is_skill_dir() { [ -f "$1/SKILL.md" ]; }
 
-# resolve_skill_dirs <category> <skill-or-empty>
-# Prints absolute skill directory paths, one per line, from the repo's skills/.
-# If <skill> is empty, lists every skill in the category.
-resolve_skill_dirs() {
-  local category="$1" skill="$2"
-  local base="$REPO_ROOT/skills/$category"
-  [ -d "$base" ] || die "Category not found in repo: $category"
+# Library locations (relative to REPO_ROOT).
+REPOSITORY_DIR="skills/repository"
+LOCAL_DIR="skills/local"
 
-  if [ -n "$skill" ]; then
-    local d="$base/$skill"
-    [ -d "$d" ] || die "Skill not found in repo: $category/$skill"
-    is_skill_dir "$d" || die "Not a valid skill (no SKILL.md): $category/$skill"
-    printf '%s\n' "$d"
-  else
-    local found=0 d
-    for d in "$base"/*/; do
-      [ -d "$d" ] || continue
-      d="${d%/}"
-      if is_skill_dir "$d"; then printf '%s\n' "$d"; found=1; fi
-    done
-    [ "$found" -eq 1 ] || die "No valid skills found in category: $category"
-  fi
-}
-
-# resolve_skill_dirs_soft <category> <skill-or-empty>
-# Like resolve_skill_dirs, but warns and returns non-zero instead of dying. Used
-# when a missing skill (e.g. since --unloaded) must not abort the whole run.
-resolve_skill_dirs_soft() {
-  local category="$1" skill="$2"
-  local base="$REPO_ROOT/skills/$category"
-  [ -d "$base" ] || { warn "Category not found in repo: $category"; return 1; }
-
-  if [ -n "$skill" ]; then
-    local d="$base/$skill"
-    is_skill_dir "$d" || { warn "Skill not found in repo: $category/$skill"; return 1; }
-    printf '%s\n' "$d"
-  else
-    local found=0 d
-    for d in "$base"/*/; do
-      [ -d "$d" ] || continue
-      d="${d%/}"
-      if is_skill_dir "$d"; then printf '%s\n' "$d"; found=1; fi
-    done
-    [ "$found" -eq 1 ] || { warn "No valid skills found in category: $category"; return 1; }
-  fi
-}
-
-# split_target <selector>  e.g. "Academic/pptx-poster" or "Academic"
-# Sets TARGET_CATEGORY and TARGET_SKILL (skill may be empty).
-split_target() {
+# resolve_selector <selector>
+# A selector is an exact skill name, or a category (→ every skill in it).
+# Prints matching skill names, one per line. Dies when nothing matches.
+resolve_selector() {
   local sel="$1"
-  case "$sel" in
-    */*) TARGET_CATEGORY="${sel%%/*}"; TARGET_SKILL="${sel#*/}" ;;
-    *)   TARGET_CATEGORY="$sel";        TARGET_SKILL="" ;;
-  esac
-  [ -n "$TARGET_CATEGORY" ] || die "Empty target selector"
+  if config_skill_exists "$sel"; then
+    config_skills_in_category "$sel" >/dev/null 2>&1 \
+      && warn "'$sel' is both a skill and a category; using the skill."
+    printf '%s\n' "$sel"
+  else
+    config_skills_in_category "$sel" \
+      || die "No skill or category named '$sel' in the library (see --list)"
+  fi
+}
+
+# resolve_selector_soft — like resolve_selector, but warns instead of dying.
+resolve_selector_soft() {
+  local sel="$1"
+  if config_skill_exists "$sel"; then
+    printf '%s\n' "$sel"
+  else
+    config_skills_in_category "$sel" \
+      || { warn "No skill or category named '$sel' in the library"; return 1; }
+  fi
+}
+
+# skill_dir_checked <name> — resolve the skill's source dir and verify it holds
+# a SKILL.md. Hints at submodule init when the checkout is missing.
+skill_dir_checked() {
+  local name="$1" d
+  d="$(config_skill_dir "$name")" || die "Skill '$name' has no resolvable source in config.yaml"
+  if [ ! -d "$d" ]; then
+    die "Source folder missing for '$name': $d
+Is the submodule initialized? Try: git submodule update --init"
+  fi
+  is_skill_dir "$d" || die "Not a valid skill (no SKILL.md): $d"
+  printf '%s\n' "$d"
 }
 
 # dedupe_append <listvar-name> <value>  — append value if not already present.
@@ -145,12 +130,13 @@ $2
 
 # --- symlink helpers (shared by install / remove / pin) ----------------------
 
-# link_skill <skill-dir> <dest-dir> [mode] — install skill into dest as <name>.
-# mode "copy" (default) duplicates the folder so tools that don't follow symlinks
-# (e.g. Claude Desktop) can see it; mode "symlink" creates a soft link instead.
+# link_skill <skill-dir> <dest-dir> <name> [mode] — install skill into dest as
+# <name> (the db skill name; the source dir's basename may differ, e.g. for a
+# repo whose root is the skill). mode "copy" (default) duplicates the folder so
+# tools that don't follow symlinks (e.g. Claude Desktop) can see it; mode
+# "symlink" creates a soft link instead.
 link_skill() {
-  local skill="$1" dest="$2" mode="${3:-copy}"
-  local name; name="$(basename "$skill")"
+  local skill="$1" dest="$2" name="$3" mode="${4:-copy}"
   local entry="$dest/$name"
   if [ "$mode" = "symlink" ]; then
     ln -sfn "$skill" "$entry"
@@ -158,6 +144,8 @@ link_skill() {
   else
     rm -rf "$entry"
     cp -R "$skill" "$entry"
+    # A repo-root skill's copy would carry the submodule's .git pointer.
+    rm -rf "$entry/.git"
     info "Copied: $entry"
   fi
 }
@@ -181,16 +169,19 @@ unlink_skill() {
   fi
 }
 
-# remove_all_skills <dest-dir> — remove every managed skill in dest (symlinks and
-# copied skill dirs), leaving anything that isn't a managed skill.
-remove_all_skills() {
-  local dest="$1"
-  [ -d "$dest" ] || { note "Nothing installed: $dest"; return 0; }
-  local entry
-  for entry in "$dest"/*; do
-    [ -e "$entry" ] || [ -L "$entry" ] || continue
-    unlink_skill "$(basename "$entry")" "$dest"
-  done
+# record_install <name> <scope> <project-root> <tools> <dest>
+# Update the skill's install state in the db after a successful install.
+# Shared by install and pin.
+record_install() {
+  local name="$1" scope="$2" project_root="$3" tools="$4" dest="$5" t
+  if [ "$scope" = "global" ]; then
+    for t in $tools; do
+      [ "$(global_dir_for_tool "$t")" = "$dest" ] && config_skill_add_agent "$name" "$t"
+    done
+  else
+    config_skill_add_project "$name" "$project_root"
+  fi
+  return 0
 }
 
 # build_dests <tools> <scope> <project-root> — print the deduped destination

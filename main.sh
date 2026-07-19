@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # main.sh — entry point for the personal skills manager.
 #
-#   ./main.sh --load    ...   download/import skills into this repo
-#   ./main.sh --install ...   symlink skills into agent tool directories
-#   ./main.sh --remove  ...   remove those symlinks
+#   ./main.sh --load    ...   load a source repo/folder into the library
+#   ./main.sh --install ...   install skills into agent tool directories
+#   ./main.sh --remove  ...   remove installed skills
 #
 # See README.md for full usage.
 
@@ -19,27 +19,34 @@ usage() {
   cat <<'EOF'
 Usage: main.sh <operation> [target] [options]
 
+The library keeps whole source repos as git submodules under skills/repository/
+(local sources under skills/local/); config.yaml records every loaded repo and
+skill (category, pin flag, install state).
+
 Operations:
-  --load      Download/import a skill into this repo's skills/ folder
-  --unload    Delete a skill's (or category's) source from this repo
+  --load      Load a repo (submodule) or local source and register its skills
+  --unload    Remove skill(s) from the library (db entry + source cleanup)
   --install   Install skill(s) into agent tool skill directories (copy by default)
   --update    Like --install but overwrite existing skills without prompting
   --remove    Remove installed skill(s) from agent tool skill directories
-  --list      List skills in this repo, or installed in a tool (with a tool flag)
-  --pin       Pin skill(s): install now + keep them through future installs
-  --unpin     Remove a pin (config + the skills it installed)
+  --list      List the library, or skills installed in a tool (with a tool flag)
+  --pin       Pin skill(s): install now + re-install after any install-clear
+  --unpin     Clear the pin flag (installed copies stay; use --remove to uninstall)
 
 Load options:
-  -l, --link <url>    GitHub repo URL or skill-folder URL
-  -p, --path <dir>    Local skill folder to copy in
-  -f, --file <zip>    Zip archive containing a skill folder
-  -c, --cat  <name>   Target category (default: Main)
-      --merge         Repo has skills/<category>/<skill> layout; merge as-is
+  -l, --link <url>       GitHub repo ROOT link (subfolder /tree/ links are not
+                         supported). Without --skill, auto mode applies:
+                         SKILL.md at repo root → the repo is one skill; else
+                         every subfolder of skills/ is a skill (not a category)
+  -s, --skill <sel> ...  Select skills inside the repo's skills folder:
+                         "name" → skills/name; "Cat/name" → skills/Cat/name
+                         (category inferred from the path unless --cat is given)
+  -p, --path <dir>       Local skill folder to store under skills/local/
+  -f, --file <zip>       Zip archive to store under skills/local/
+  -c, --cat  <name>      Category for the loaded skill(s) (default: Main)
 
 Install target & options:
-  -s, --skill [Category]              Install every skill in a category
-  -s, --skill [Category]/[skill-name] Install a single skill
-  -s, --skill A B ...                 Multiple selectors at once
+  -s, --skill <name> ...      Skill name(s) and/or category name(s)
   --claude | --antigravity | --antigravity-ide
                               Limit to one tool (default: all)
   -p, --path [dir]            Project scope (omit value for current dir)
@@ -47,50 +54,51 @@ Install target & options:
       --symlink               Symlink instead of copying (default: copy)
 
 Remove target & options:
-  -s, --skill [skill-name] ...        Remove the named installed skill(s)
+  -s, --skill <name> ...      Remove the named installed skill(s)
                               Omit --skill to remove ALL installed skills
   --claude | --antigravity | --antigravity-ide
                               Limit to one tool (default: all)
   -p, --path [dir]            Project scope (omit value for current dir)
 
 List options:
-  (no flag)                   List every skill in this repo, grouped by category
+  (no flag)                   List the library, grouped by category
   --claude | --antigravity | --antigravity-ide
                               List skills installed for that tool instead
   -p, --path [dir]            Project scope (omit value for current dir)
 
 Examples:
-  main.sh --load --link https://github.com/owner/repo --merge
+  main.sh --load --link https://github.com/owner/repo                # auto mode
   main.sh --load --link https://github.com/owner/repo --cat Development
-  main.sh --load --link https://github.com/owner/repo/tree/main/path/to/skill --cat Development
+  main.sh --load --link https://github.com/owner/repo --skill my-skill
+  main.sh --load --link https://github.com/owner/repo --skill Coding/create-figure
   main.sh --load -p ./my-skill --cat Development
   main.sh --load -f ./my-skill.zip --cat Development
 
-  main.sh --install --skill Academic/pptx-poster
-  main.sh --install --skill Academic/pptx-poster --claude
-  main.sh --install --skill Development --claude
-  main.sh --install --skill Academic/pptx-poster Development/foo --claude
-  main.sh --install --skill Academic/pptx-poster --claude -p ./my-project
+  main.sh --install --skill my-skill
+  main.sh --install --skill my-skill --claude
+  main.sh --install --skill Development --claude     # whole category
+  main.sh --install --skill my-skill other-skill --claude
+  main.sh --install --skill my-skill --claude -p ./my-project
   main.sh --install --skill Development --keep
   main.sh --install --skill Development --symlink
 
-  main.sh --update --skill Academic/pptx-poster --claude
+  main.sh --update --skill my-skill --claude
 
   main.sh --list
   main.sh --list --claude
   main.sh --list --claude -p ./my-project
 
-  main.sh --remove --skill pptx-poster
-  main.sh --remove --skill pptx-poster foo --claude
+  main.sh --remove --skill my-skill
+  main.sh --remove --skill my-skill foo --claude
   main.sh --remove --claude                     # remove ALL skills for claude
-  main.sh --remove --skill pptx-poster --claude -p ./my-project
+  main.sh --remove --skill my-skill --claude -p ./my-project
 
-  main.sh --pin --skill Academic/pptx-poster --claude
-  main.sh --pin --skill Development            # pin a whole category, all tools
-  main.sh --unpin --skill Academic/pptx-poster --claude
+  main.sh --pin --skill my-skill --claude
+  main.sh --pin --skill Development             # pin a whole category
+  main.sh --unpin --skill my-skill
 
-  main.sh --unload --skill Academic/pptx-poster
-  main.sh --unload --skill Development          # delete the whole category
+  main.sh --unload --skill my-skill
+  main.sh --unload --skill Development          # unload the whole category
 EOF
 }
 

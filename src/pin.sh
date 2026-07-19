@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # pin.sh — implements `main.sh --pin ...` and `main.sh --unpin ...`
-# Pins are recorded in config.yaml and re-linked after every install-clear, so a
-# pinned skill is always available. Pinning also links it immediately.
+# Pinning sets `pinned: true` on the skill in config.yaml and installs it now.
+# Pinned skills are re-installed into any destination cleared during an install,
+# so they survive every clear. Unpinning only clears the flag — use --remove to
+# uninstall the copies.
 
 # _parse_pin_args "$@" — shared flag parsing for pin/unpin. Sets:
-#   PIN_TARGET, PIN_TOOLS, PIN_SCOPE, PIN_PATH (path is "" for global scope).
+#   PIN_TARGETS, PIN_TOOLS, PIN_SCOPE, PIN_PATH (path is "" for global scope).
 _parse_pin_args() {
-  PIN_TARGET=""; PIN_TOOLS=""; PIN_SCOPE="global"; PIN_PATH=""
+  PIN_TARGETS=""; PIN_TOOLS=""; PIN_SCOPE="global"; PIN_PATH=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --pin|--unpin) ;;
@@ -14,8 +16,14 @@ _parse_pin_args() {
       --antigravity)     PIN_TOOLS="$PIN_TOOLS antigravity" ;;
       --antigravity-ide) PIN_TOOLS="$PIN_TOOLS antigravity-ide" ;;
       -s|--skill)
-        [ -n "${2:-}" ] || die "$1 requires a value, e.g. --skill Academic/pptx-poster"
-        PIN_TARGET="$2"; shift
+        [ -n "${2:-}" ] && [ "${2#-}" = "$2" ] \
+          || die "$1 requires at least one value, e.g. --skill my-skill"
+        shift
+        while [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; do
+          PIN_TARGETS="${PIN_TARGETS:+$PIN_TARGETS
+}$1"; shift
+        done
+        continue
         ;;
       -p|--path)
         PIN_SCOPE="project"
@@ -30,36 +38,57 @@ _parse_pin_args() {
     shift
   done
 
-  [ -n "$PIN_TARGET" ] || die "No target. Use -s/--skill [Category] or -s/--skill [Category]/[skill-name]"
+  [ -n "$PIN_TARGETS" ] || die "No target. Use -s/--skill <skill-name-or-category> ..."
   [ -n "$PIN_TOOLS" ] || PIN_TOOLS="$ALL_TOOLS"
-  # Strip the leading space left by the accumulator, so it's stored cleanly.
+  # Strip the leading space left by the accumulator.
   PIN_TOOLS="${PIN_TOOLS#"${PIN_TOOLS%%[![:space:]]*}"}"
 
   if [ "$PIN_SCOPE" = "project" ]; then
     [ -d "$PIN_PATH" ] || die "Project path is not a directory: $PIN_PATH"
     PIN_PATH="$(cd "$PIN_PATH" && pwd)"
   fi
+
+  # Resolve selectors (skill names or categories) to skill names.
+  local OLDIFS="$IFS" sel resolved
+  PIN_NAMES=""
+  IFS='
+'
+  for sel in $PIN_TARGETS; do
+    IFS="$OLDIFS"
+    resolved="$(resolve_selector "$sel")"
+    PIN_NAMES="${PIN_NAMES:+$PIN_NAMES
+}$resolved"
+    IFS='
+'
+  done
+  IFS="$OLDIFS"
 }
 
 pin_main() {
   _parse_pin_args "$@"
 
-  # Record the pin first (config_add_pin merges tools into any existing entry).
-  config_add_pin "$PIN_TARGET" "$PIN_TOOLS" "$PIN_SCOPE" "$PIN_PATH"
-  info "Pinned '$PIN_TARGET' for: $PIN_TOOLS ($PIN_SCOPE)"
-
-  # Then link it now so it's available immediately (no clearing).
-  split_target "$PIN_TARGET"
-  local skill_dirs; skill_dirs="$(resolve_skill_dirs "$TARGET_CATEGORY" "$TARGET_SKILL")"
   local dests d; dests="$(build_dests "$PIN_TOOLS" "$PIN_SCOPE" "$PIN_PATH")"
   [ -n "$dests" ] || die "No valid destinations resolved"
 
-  local OLDIFS="$IFS"; IFS='
+  local OLDIFS="$IFS" nm sdir
+  IFS='
 '
-  for d in $dests; do
-    mkdir -p "$d"
-    local s
-    for s in $skill_dirs; do link_skill "$s" "$d"; done
+  for nm in $PIN_NAMES; do
+    IFS="$OLDIFS"
+    config_set_skill_field "$nm" pinned true
+    info "Pinned: $nm"
+    # Install it now so it's available immediately (no clearing).
+    sdir="$(skill_dir_checked "$nm")"
+    IFS='
+'
+    for d in $dests; do
+      IFS="$OLDIFS"
+      mkdir -p "$d"
+      link_skill "$sdir" "$d" "$nm"
+      record_install "$nm" "$PIN_SCOPE" "$PIN_PATH" "$PIN_TOOLS" "$d"
+      IFS='
+'
+    done
   done
   IFS="$OLDIFS"
 
@@ -69,33 +98,22 @@ pin_main() {
 unpin_main() {
   _parse_pin_args "$@"
 
-  config_is_pinned "$PIN_TARGET" "$PIN_SCOPE" "$PIN_PATH" \
-    || warn "'$PIN_TARGET' is not pinned for ($PIN_SCOPE); removing any stray symlinks anyway."
-
-  # Remove the config entry (named tools only) first.
-  config_remove_pin "$PIN_TARGET" "$PIN_SCOPE" "$PIN_PATH" "$PIN_TOOLS"
-  info "Unpinned '$PIN_TARGET' for: $PIN_TOOLS ($PIN_SCOPE)"
-
-  # Then remove the symlinks the pin created.
-  split_target "$PIN_TARGET"
-  local skill_dirs names="" s
-  skill_dirs="$(resolve_skill_dirs "$TARGET_CATEGORY" "$TARGET_SKILL")"
-  local OLDIFS="$IFS"; IFS='
-'
-  for s in $skill_dirs; do
-    names="${names:+$names
-}$(basename "$s")"
-  done
-  IFS="$OLDIFS"
-
-  local dests d; dests="$(build_dests "$PIN_TOOLS" "$PIN_SCOPE" "$PIN_PATH")"
+  local OLDIFS="$IFS" nm
   IFS='
 '
-  for d in $dests; do
-    local n
-    for n in $names; do unlink_skill "$n" "$d"; done
+  for nm in $PIN_NAMES; do
+    IFS="$OLDIFS"
+    if config_skill_is_pinned "$nm"; then
+      config_set_skill_field "$nm" pinned false
+      info "Unpinned: $nm"
+    else
+      warn "Not pinned: $nm"
+    fi
+    IFS='
+'
   done
   IFS="$OLDIFS"
 
+  note "Installed copies are left in place; use --remove to uninstall them."
   info "Done."
 }

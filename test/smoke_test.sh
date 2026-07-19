@@ -1,18 +1,34 @@
 #!/usr/bin/env bash
-# Offline smoke test for main.sh. Touches only temp dirs and skills/_SmokeTest.
+# Offline smoke test for main.sh. Runs against a scratch copy of the manager
+# (main.sh + src/) in a temp dir, so the real repo, its submodules, and the
+# real config.yaml are never touched. "GitHub" loads are exercised through
+# local fixture git repos, mapped to fake github.com URLs with url.insteadOf.
 # Run from anywhere:  bash test/smoke_test.sh
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
-cd "$REPO_ROOT"
+SRC_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 
 WORK="$(mktemp -d)"
-CATEGORY="_SmokeTest"
-trap 'rm -rf "$WORK"; rm -rf "skills/$CATEGORY"' EXIT
+trap 'rm -rf "$WORK"' EXIT
 
-# Use a throwaway config so we never touch the real config.yaml. The non-default
-# name also makes init_config skip the .gitignore mutation.
-export CONFIG_FILE="$WORK/test-config.yaml"
+# Scratch manager repo (REPO_ROOT for every main.sh run below).
+MGR="$WORK/manager"
+mkdir -p "$MGR"
+cp "$SRC_ROOT/main.sh" "$MGR/"
+cp -R "$SRC_ROOT/src" "$MGR/"
+git -C "$MGR" init -q
+
+# git config via environment: allow file-protocol submodules, give an identity,
+# and rewrite the fake github URLs to the local fixture repos.
+export GIT_CONFIG_COUNT=6
+export GIT_CONFIG_KEY_0=protocol.file.allow GIT_CONFIG_VALUE_0=always
+export GIT_CONFIG_KEY_1=user.name          GIT_CONFIG_VALUE_1=smoke
+export GIT_CONFIG_KEY_2=user.email         GIT_CONFIG_VALUE_2=smoke@test
+export GIT_CONFIG_KEY_3="url.file://$WORK/fixrepo.insteadOf"   GIT_CONFIG_VALUE_3=https://github.com/tauthor/fixrepo
+export GIT_CONFIG_KEY_4="url.file://$WORK/rootrepo.insteadOf"  GIT_CONFIG_VALUE_4=https://github.com/tauthor/rootrepo
+export GIT_CONFIG_KEY_5="url.file://$WORK/clashrepo.insteadOf" GIT_CONFIG_VALUE_5=https://github.com/oauthor/clashrepo
+
+CONFIG="$MGR/config.yaml"
 
 pass=0; fail=0
 check() { # check <desc> <test-cmd...>
@@ -20,110 +36,158 @@ check() { # check <desc> <test-cmd...>
   if "$@" >/dev/null 2>&1; then printf 'ok   - %s\n' "$desc"; pass=$((pass+1))
   else printf 'FAIL - %s\n' "$desc"; fail=$((fail+1)); fi
 }
-in_file()     { grep -q "$1" "$2"; }
-not_in_file() { ! grep -q "$1" "$2"; }
-# A skill is "installed" if it's a symlink or a copied dir holding SKILL.md.
+in_file()     { grep -q -e "$1" "$2"; }
+not_in_file() { ! grep -q -e "$1" "$2"; }
+not()         { ! "$@"; }
 is_installed() { [ -L "$1" ] || [ -f "$1/SKILL.md" ]; }
+# skill_block <name> — print the config.yaml block of one skill entry.
+skill_block() {
+  awk -v n="  - name: $1" '
+    $0 == n            { f=1; print; next }
+    f && /^  - name: / { f=0 }
+    f && /^[^ ]/       { f=0 }
+    f                  { print }' "$CONFIG"
+}
+block_has()     { skill_block "$1" | grep -q -e "$2"; }
+block_has_not() { ! block_has "$1" "$2"; }
 
-# --- fixtures ---------------------------------------------------------------
-mkdir -p "$WORK/src/alpha/scripts"
-printf -- '---\nname: alpha\ndescription: test skill alpha\n---\nhello\n' > "$WORK/src/alpha/SKILL.md"
-printf 'echo hi\n' > "$WORK/src/alpha/scripts/run.sh"
+mk_skill() { # mk_skill <dir> <name>
+  mkdir -p "$1"
+  printf -- '---\nname: %s\ndescription: test skill %s\n---\nhello\n' "$2" "$2" > "$1/SKILL.md"
+}
+mk_gitrepo() { # mk_gitrepo <dir>
+  git -C "$1" init -q
+  git -C "$1" add -A
+  git -C "$1" commit -qm fixture
+}
 
-# a zip whose root contains a skill folder "beta"
+# --- fixtures ----------------------------------------------------------------
+mk_skill "$WORK/src/alpha" alpha
+printf 'echo hi\n' > "$WORK/src/alpha/scripts.sh"
+
 mkdir -p "$WORK/zipsrc/beta"
-printf -- '---\nname: beta\ndescription: test skill beta\n---\nhi\n' > "$WORK/zipsrc/beta/SKILL.md"
+mk_skill "$WORK/zipsrc/beta" beta
 ( cd "$WORK/zipsrc" && zip -qr "$WORK/beta.zip" beta )
 
+# fixrepo: flat skills + a nested category + a non-skill dir
+mk_skill "$WORK/fixrepo/skills/gamma" gamma
+mk_skill "$WORK/fixrepo/skills/epsilon" epsilon
+mk_skill "$WORK/fixrepo/skills/Cat1/delta" delta
+mkdir -p "$WORK/fixrepo/skills/notaskill"; touch "$WORK/fixrepo/skills/notaskill/README.md"
+mk_gitrepo "$WORK/fixrepo"
+
+# rootrepo: the repo root is itself a skill
+mk_skill "$WORK/rootrepo" rootrepo
+mk_gitrepo "$WORK/rootrepo"
+
+# clashrepo: provides another "gamma"
+mk_skill "$WORK/clashrepo/skills/gamma" gamma
+mk_gitrepo "$WORK/clashrepo"
+
 PROJ="$WORK/project"; mkdir -p "$PROJ"
+run() { "$MGR/main.sh" "$@"; }
 
-# --- load: local path -------------------------------------------------------
-./main.sh --load -p "$WORK/src/alpha" --cat "$CATEGORY" >/dev/null
-check "load --path imports skill"        test -f "skills/$CATEGORY/alpha/SKILL.md"
-check "load --path keeps subfolders"     test -f "skills/$CATEGORY/alpha/scripts/run.sh"
+# --- load: local path & zip --------------------------------------------------
+run --load -p "$WORK/src/alpha" --cat CatL >/dev/null
+check "load --path stores under skills/local"  test -f "$MGR/skills/local/alpha/SKILL.md"
+check "load --path keeps extra files"          test -f "$MGR/skills/local/alpha/scripts.sh"
+check "config: local entry for alpha"          in_file "  - name: alpha" "$CONFIG"
+check "config: alpha skill repo=local"         block_has alpha "repo: local"
+check "config: alpha category recorded"        block_has alpha "category: CatL"
 
-# --- load: zip --------------------------------------------------------------
-./main.sh --load -f "$WORK/beta.zip" --cat "$CATEGORY" >/dev/null
-check "load --file imports zip skill"     test -f "skills/$CATEGORY/beta/SKILL.md"
+run --load -f "$WORK/beta.zip" --cat CatL >/dev/null
+check "load --file stores under skills/local"  test -f "$MGR/skills/local/beta/SKILL.md"
 
-# --- install: project scope, single skill (copy is the default) -------------
-./main.sh --install --skill "$CATEGORY/alpha" --claude -p "$PROJ" >/dev/null
-check "install copies the skill"          test -f "$PROJ/.claude/skills/alpha/SKILL.md"
+# --- load: github auto mode (flat skills/, batch confirm) --------------------
+printf 'y\n' | run --load --link https://github.com/tauthor/fixrepo --cat CatA >/dev/null
+check "submodule checkout exists"     test -f "$MGR/skills/repository/tauthor-fixrepo/skills/gamma/SKILL.md"
+check ".gitmodules records the repo"  in_file "tauthor/fixrepo" "$MGR/.gitmodules"
+check "config: repo entry added"      in_file "author: tauthor" "$CONFIG"
+check "config: gamma registered"      block_has gamma "repo: tauthor/fixrepo"
+check "config: epsilon registered"    block_has epsilon "subpath: skills/epsilon"
+check "config: category from --cat"   block_has gamma "category: CatA"
+check "non-skill dir not registered"  not_in_file "notaskill" "$CONFIG"
+check "nested category dir skipped in auto mode" block_has_not delta "repo:"
+
+# --- load: --skill Cat/name infers the category ------------------------------
+run --load --link https://github.com/tauthor/fixrepo --skill Cat1/delta >/dev/null
+check "config: delta registered"          block_has delta "subpath: skills/Cat1/delta"
+check "config: delta category inferred"   block_has delta "category: Cat1"
+
+# --- load: repo root is a skill ----------------------------------------------
+run --load --link https://github.com/tauthor/rootrepo --cat CatA >/dev/null
+check "root-skill repo registered"       block_has rootrepo "repo: tauthor/rootrepo"
+check "root-skill subpath is empty"      block_has rootrepo 'subpath: ""'
+
+# --- load: /tree/ links are rejected -----------------------------------------
+check "subfolder link rejected" \
+  not run --load --link https://github.com/o/r/tree/main/skills/x
+
+# --- load: name clash → keep old / replace -----------------------------------
+printf 'n\n' | run --load --link https://github.com/oauthor/clashrepo >/dev/null 2>&1 || true
+check "clash declined keeps old source"    block_has gamma "repo: tauthor/fixrepo"
+check "useless submodule cleaned up again" test ! -d "$MGR/skills/repository/oauthor-clashrepo"
+
+printf 'y\ny\n' | run --load --link https://github.com/oauthor/clashrepo >/dev/null
+check "clash accepted replaces source"     block_has gamma "repo: oauthor/clashrepo"
+check "replacement did not dup the entry"  test "$(grep -c '  - name: gamma' "$CONFIG")" = 1
+
+# --- install: project scope, copy by default ---------------------------------
+run --install --skill alpha --claude -p "$PROJ" >/dev/null
+check "install copies the skill"            test -f "$PROJ/.claude/skills/alpha/SKILL.md"
 check "default install is a copy, not link" test ! -L "$PROJ/.claude/skills/alpha"
-check "copy keeps subfolders"             test -f "$PROJ/.claude/skills/alpha/scripts/run.sh"
+check "config: project recorded on alpha"   block_has alpha "- $PROJ"
 
-# --- install: --symlink opts into soft links --------------------------------
-printf 'y\n' | ./main.sh --install --skill "$CATEGORY/alpha" --claude -p "$PROJ" --symlink >/dev/null
-check "--symlink creates a symlink"       test -L "$PROJ/.claude/skills/alpha"
+# --- install: a category selector installs every skill in it -----------------
+printf 'y\n' | run --install --skill CatA --claude -p "$PROJ" >/dev/null
+check "category install: epsilon present"  is_installed "$PROJ/.claude/skills/epsilon"
+check "category install: rootrepo present" is_installed "$PROJ/.claude/skills/rootrepo"
+check "root-skill copy drops .git pointer" test ! -e "$PROJ/.claude/skills/rootrepo/.git"
 
-# --- install: multiple --skill selectors at once ----------------------------
-printf 'y\n' | ./main.sh --install --skill "$CATEGORY/alpha" "$CATEGORY/beta" --antigravity -p "$PROJ" >/dev/null
-check "multi-skill installs alpha"        is_installed "$PROJ/.agents/skills/alpha"
-check "multi-skill installs beta"         is_installed "$PROJ/.agents/skills/beta"
+# --- install: --symlink opts into soft links ---------------------------------
+printf 'y\n' | run --install --skill alpha --claude -p "$PROJ" --symlink >/dev/null
+check "--symlink creates a symlink"        test -L "$PROJ/.claude/skills/alpha"
 
-# --- install: whole category ------------------------------------------------
-printf 'y\n' | ./main.sh --install --skill "$CATEGORY" --antigravity -p "$PROJ" >/dev/null
-check "install category installs alpha"   is_installed "$PROJ/.agents/skills/alpha"
-check "install category installs beta"    is_installed "$PROJ/.agents/skills/beta"
+# --- pin: flag set + installed now -------------------------------------------
+run --pin --skill beta --claude -p "$PROJ" >/dev/null
+check "pin installs the skill"   is_installed "$PROJ/.claude/skills/beta"
+check "config: pinned flag set"  block_has beta "pinned: true"
 
-# --- install: warns before overwriting an existing skill (declining skips) ---
-printf 'n\n' | ./main.sh --install --skill "$CATEGORY/alpha" --antigravity -p "$PROJ" --keep >/dev/null
-check "declining overwrite keeps skill"   is_installed "$PROJ/.agents/skills/alpha"
+# --- pin survives an install-clear -------------------------------------------
+printf 'y\ny\n' | run --install --skill alpha --claude -p "$PROJ" >/dev/null
+check "clear happened (epsilon gone)"      test ! -e "$PROJ/.claude/skills/epsilon"
+check "pinned skill re-installed on clear" is_installed "$PROJ/.claude/skills/beta"
+check "requested skill installed"          is_installed "$PROJ/.claude/skills/alpha"
 
-# --- update: overwrites without prompting, leaves others intact -------------
-./main.sh --update --skill "$CATEGORY/alpha" --antigravity -p "$PROJ" >/dev/null
-check "update overwrites alpha silently"  is_installed "$PROJ/.agents/skills/alpha"
-check "update leaves other skills (beta)" is_installed "$PROJ/.agents/skills/beta"
+# --- update: overwrites without prompting ------------------------------------
+run --update --skill alpha --claude -p "$PROJ" >/dev/null
+check "--update reinstalls in place"       is_installed "$PROJ/.claude/skills/alpha"
 
-# --- list: repo library and installed skills --------------------------------
-check "list repo shows category"  sh -c "./main.sh --list | grep -q '$CATEGORY/'"
-check "list repo shows skill"     sh -c "./main.sh --list | grep -q -- '- alpha'"
-check "list installed shows skill" sh -c "./main.sh --list --antigravity -p '$PROJ' | grep -q -- '- alpha'"
+# --- remove: named skill + install-state cleanup -----------------------------
+printf 'y\n' | run --remove --skill alpha --claude -p "$PROJ" >/dev/null
+check "remove deletes the skill"           test ! -e "$PROJ/.claude/skills/alpha"
+check "config: project record dropped"     block_has_not alpha "- $PROJ"
 
-# --- remove: single skill by flat name (needs y/n confirm) ------------------
-printf 'y\n' | ./main.sh --remove --skill alpha --claude -p "$PROJ" >/dev/null
-check "remove deletes the skill"          test ! -e "$PROJ/.claude/skills/alpha"
+# --- remove: pinned skill warns and unpins -----------------------------------
+printf 'y\n' | run --remove --skill beta --claude -p "$PROJ" >/dev/null
+check "pinned skill removed"               test ! -e "$PROJ/.claude/skills/beta"
+check "config: pin flag cleared"           block_has beta "pinned: false"
 
-# --- remove: declining aborts -----------------------------------------------
-printf 'n\n' | ./main.sh --remove --skill beta --antigravity -p "$PROJ" >/dev/null 2>&1 || true
-check "declining keeps the skill"         is_installed "$PROJ/.agents/skills/beta"
+# --- list --------------------------------------------------------------------
+check "list shows library category" bash -c "'$MGR/main.sh' --list | grep -q 'CatA/'"
+check "list shows source repo slug" bash -c "'$MGR/main.sh' --list | grep -q 'tauthor/fixrepo'"
 
-# --- remove: no --skill clears every skill for the tool ---------------------
-printf 'y\n' | ./main.sh --remove --antigravity -p "$PROJ" >/dev/null
-check "remove-all clears alpha"           test ! -e "$PROJ/.agents/skills/alpha"
-check "remove-all clears beta"            test ! -e "$PROJ/.agents/skills/beta"
+# --- unload: last skill of a repo removes the submodule ----------------------
+printf 'y\ny\n' | run --unload --skill gamma >/dev/null
+check "unload drops the db entry"          block_has_not gamma "repo:"
+check "unload removes emptied submodule"   test ! -d "$MGR/skills/repository/oauthor-clashrepo"
+check "other repos untouched"              test -d "$MGR/skills/repository/tauthor-fixrepo"
 
-# --- pin: installs immediately + records config -----------------------------
-PROJ2="$WORK/project2"; mkdir -p "$PROJ2"
-./main.sh --pin --skill "$CATEGORY/alpha" --claude -p "$PROJ2" >/dev/null
-check "pin installs the skill now"        is_installed "$PROJ2/.claude/skills/alpha"
-check "pin records it in config"          in_file "skill: $CATEGORY/alpha" "$CONFIG_FILE"
+# --- unload: local skill deletes its source ----------------------------------
+printf 'y\n' | run --unload --skill alpha >/dev/null
+check "local source deleted"     test ! -d "$MGR/skills/local/alpha"
+check "local db entry deleted"   block_has_not alpha "repo:"
 
-# --- pin survives an install-clear (no --keep) ------------------------------
-printf 'y\n' | ./main.sh --install --skill "$CATEGORY/beta" --claude -p "$PROJ2" >/dev/null
-check "install adds the new skill"        is_installed "$PROJ2/.claude/skills/beta"
-check "pinned skill survives the clear"   is_installed "$PROJ2/.claude/skills/alpha"
-
-# --- unpin: removes skill + config ------------------------------------------
-./main.sh --unpin --skill "$CATEGORY/alpha" --claude -p "$PROJ2" >/dev/null
-check "unpin removes the skill"           test ! -e "$PROJ2/.claude/skills/alpha"
-check "unpin clears the config"           not_in_file "skill: $CATEGORY/alpha" "$CONFIG_FILE"
-
-# --- remove warns on a pinned skill, de-pins on confirm ---------------------
-./main.sh --pin --skill "$CATEGORY/beta" --claude -p "$PROJ2" >/dev/null
-printf 'n\n' | ./main.sh --remove --skill beta --claude -p "$PROJ2" >/dev/null 2>&1 || true
-check "declining keeps pinned skill"      is_installed "$PROJ2/.claude/skills/beta"
-check "declining keeps pin config"        in_file "skill: $CATEGORY/beta" "$CONFIG_FILE"
-printf 'y\n' | ./main.sh --remove --skill beta --claude -p "$PROJ2" >/dev/null
-check "confirming removes pinned skill"   test ! -e "$PROJ2/.claude/skills/beta"
-check "confirming strips pin config"      not_in_file "skill: $CATEGORY/beta" "$CONFIG_FILE"
-
-# --- unload deletes the repo source -----------------------------------------
-printf 'n\n' | ./main.sh --unload --skill "$CATEGORY/beta" >/dev/null 2>&1 || true
-check "declining unload keeps source"     test -f "skills/$CATEGORY/beta/SKILL.md"
-printf 'y\n' | ./main.sh --unload --skill "$CATEGORY/alpha" >/dev/null
-check "unload deletes the source"         test ! -e "skills/$CATEGORY/alpha"
-
-# --- summary ----------------------------------------------------------------
+# --- summary -----------------------------------------------------------------
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

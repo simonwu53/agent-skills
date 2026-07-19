@@ -1,0 +1,9 @@
+[submodule "skills/repository/Haojae-scipilot-figure-skill"]
+	path = skills/repository/Haojae-scipilot-figure-skill
+	url = https://github.com/Haojae/scipilot-figure-skill
+[submodule "skills/repository/K-Dense-AI-claude-scientific-writer"]
+	path = skills/repository/K-Dense-AI-claude-scientific-writer
+	url = https://github.com/K-Dense-AI/claude-scientific-writer
+[submodule "skills/repository/emilkowalski-skills"]
+	path = skills/repository/emilkowalski-skills
+	url = https://github.com/emilkowalski/skills
