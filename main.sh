@@ -32,6 +32,7 @@ Operations:
   --list      List the library, or skills installed in a tool (with a tool flag)
   --pin       Pin skill(s): install now + re-install after any install-clear
   --unpin     Clear the pin flag (installed copies stay; use --remove to uninstall)
+  --sync      Refresh loaded repo sources (submodules) to their latest remote commit
 
 Load options:
   -l, --link <url>       GitHub repo ROOT link (subfolder /tree/ links are not
@@ -59,6 +60,9 @@ Remove target & options:
   --claude | --antigravity | --antigravity-ide
                               Limit to one tool (default: all)
   -p, --path [dir]            Project scope (omit value for current dir)
+
+Sync options:
+  -r, --repo <author/name> ...  Refresh only the given repo(s) (default: all)
 
 List options:
   (no flag)                   List the library, grouped by category
@@ -99,6 +103,9 @@ Examples:
 
   main.sh --unload --skill my-skill
   main.sh --unload --skill Development          # unload the whole category
+
+  main.sh --sync                                # refresh all loaded repos
+  main.sh --sync --repo owner/repo              # refresh one repo
 EOF
 }
 
@@ -120,6 +127,7 @@ main() {
       --list)    op="list" ;;
       --pin)     op="pin" ;;
       --unpin)   op="unpin" ;;
+      --sync)    op="sync" ;;
       -h|--help) usage; exit 0 ;;
     esac
   done
@@ -132,7 +140,8 @@ main() {
     list)    . "$REPO_ROOT/src/list.sh";     list_main "$@" ;;
     pin)     . "$REPO_ROOT/src/pin.sh";      pin_main "$@" ;;
     unpin)   . "$REPO_ROOT/src/pin.sh";      unpin_main "$@" ;;
-    *) err "No operation given (--load | --unload | --install | --update | --remove | --list | --pin | --unpin)"; usage; exit 1 ;;
+    sync)    . "$REPO_ROOT/src/sync.sh";     sync_main "$@" ;;
+    *) err "No operation given (--load | --unload | --install | --update | --remove | --list | --pin | --unpin | --sync)"; usage; exit 1 ;;
   esac
 }
 

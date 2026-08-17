@@ -66,7 +66,7 @@ When your changes create orphans:
   `${var,,}`, `mapfile`). Use indexed arrays / `case` / `tr` instead.
 - **Keep `main.sh` as the single entry point.** It parses the operation and dispatches to
   the op scripts in `src/` (`download.sh`, `install.sh`, `remove.sh`, `pin.sh`,
-  `list.sh`), all sharing `src/common.sh` + `src/config.sh`.
+  `list.sh`, `sync.sh`), all sharing `src/common.sh` + `src/config.sh`.
 - **Validate skills by `SKILL.md`.** A directory is a skill only if it contains `SKILL.md`.
 - Put validation/smoke tests under `test/`.
 
@@ -128,8 +128,10 @@ When your changes create orphans:
   (`version:`, `repos:`, `local:`, `skills:`) are namespaced + versioned; the writers in
   `src/config.sh` splice one section at a time and preserve the rest. A v1 file is
   backed up to `config.yaml.v1.bak` and re-initialized.
-- **A future `--sync` op** will refresh loaded repos via their submodules
-  (`git submodule update --remote`); keep `subpath`/`lastUpdate` accurate for it.
+- **`--sync` refreshes loaded repos** via `git submodule update --remote` (all repos, or
+  `--repo author/name ...`). It touches only the library: moved submodule pointers are
+  staged (never committed) and the repo's `lastUpdate` is bumped. Installed copies are
+  not refreshed — the user runs `--update` afterwards.
 
 ## Version Control
 

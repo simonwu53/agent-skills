@@ -370,6 +370,26 @@ config_remove_repo() {
   _config_write_section repos "$out"
 }
 
+# config_repo_touch <slug> — set the repo's lastUpdate to now.
+config_repo_touch() {
+  local slug="$1" out="" r now; now="$(_config_now)"
+  local OLDIFS="$IFS"; IFS='
+'
+  for r in $(config_read_repos); do
+    IFS="$OLDIFS"
+    if [ "${r%%"$_SEP"*}" = "$slug" ]; then
+      local head="${r%"$_SEP"*"$_SEP"*}" da="${r##*"$_SEP"}"
+      r="$head$_SEP$now$_SEP$da"
+    fi
+    out="${out:+$out
+}$r"
+    IFS='
+'
+  done
+  IFS="$OLDIFS"
+  _config_write_section repos "$out"
+}
+
 # --- local sources -----------------------------------------------------------
 
 config_local_record() {

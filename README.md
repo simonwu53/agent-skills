@@ -29,7 +29,8 @@ and where it's installed.
 │   ├── install.sh           # `--install` / `--update` implementation
 │   ├── remove.sh            # `--remove` implementation
 │   ├── pin.sh               # `--pin` / `--unpin` implementation
-│   └── list.sh              # `--list` implementation
+│   ├── list.sh              # `--list` implementation
+│   └── sync.sh              # `--sync` implementation
 ├── test/                    # Validation / smoke tests
 ├── main.sh                  # Entry point for all operations
 ├── config.yaml              # Library database (machine-local, git-ignored)
@@ -98,9 +99,7 @@ and the selected skills are registered in `config.yaml`.
 - Loading more skills from an already-loaded repo reuses the existing submodule.
 - Provide exactly **one** source (`--link`, `--path`, or `--file`).
 
-To update loaded repos to their latest upstream state, use git's submodule machinery
-(e.g. `git submodule update --remote skills/repository/<author>-<repo>`); a dedicated
-`--sync` operation is planned.
+To refresh loaded repos to their latest upstream state, use `--sync` (see section 7).
 
 ### 2. Install skills (copy into tools)
 
@@ -239,6 +238,26 @@ confirmation first.
   with its own confirmation.
 - Existing symlinks elsewhere that pointed at the deleted source will dangle (you're warned).
 
+### 7. Sync repo sources (refresh the library)
+
+Like `apt update` for the library: pulls every loaded repo submodule to the latest commit
+of its remote branch. Only the library is touched — installed **copies** in tool dirs are
+not refreshed (symlinked installs see the new content immediately).
+
+```bash
+# Refresh all loaded repos
+./main.sh --sync
+
+# Refresh only some repos (author/name slugs, as shown by --list)
+./main.sh --sync --repo K-Dense-AI/claude-scientific-writer
+```
+
+- Prints `old -> new` for repos that moved, `up to date` otherwise.
+- Updated submodule pointers are **staged** in this repo (never committed) and the repo's
+  `lastUpdate` in `config.yaml` is bumped.
+- To push new content into tools that got copies, run `--update --skill <name> ...`
+  afterwards.
+
 ### Configuration (`config.yaml`)
 
 `config.yaml` at the repo root is the library database. It is **auto-created on first
@@ -295,6 +314,8 @@ skills:
 | `--list`            |       | op                | List the library, or installed skills (with a tool flag)|
 | `--pin`             |       | op                | Pin skill(s): install now + survive install-clears  |
 | `--unpin`           |       | op                | Clear the pin flag (copies stay installed)          |
+| `--sync`            |       | op                | Refresh loaded repo submodules to latest remote     |
+| `--repo`            | `-r`  | sync              | Limit sync to the given `author/name` repo(s)       |
 | `--link`            | `-l`  | load              | GitHub repo ROOT link                               |
 | `--path`            | `-p`  | load              | Local skill folder (source)                        |
 | `--path`            | `-p`  | install / remove / list / pin | Project scope; value optional (current dir) |

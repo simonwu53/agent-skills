@@ -7,3 +7,6 @@
 [submodule "skills/repository/emilkowalski-skills"]
 	path = skills/repository/emilkowalski-skills
 	url = https://github.com/emilkowalski/skills
+[submodule "skills/repository/AIScientists-Dev-academic-humanizer"]
+	path = skills/repository/AIScientists-Dev-academic-humanizer
+	url = https://github.com/AIScientists-Dev/academic-humanizer
